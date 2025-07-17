@@ -1,18 +1,18 @@
 [submodule "external/submodules/glfw"]
 	path = external/submodules/glfw
-	url = https://github.com/glfw/glfw
+	url = https://ghfast.top/github.com/glfw/glfw
 [submodule "external/submodules/eigen"]
 	path = external/submodules/eigen
 	url = https://gitlab.com/libeigen/eigen.git
 [submodule "external/submodules/imgui"]
 	path = external/submodules/imgui
-	url = https://github.com/ocornut/imgui
+	url = https://ghfast.top/github.com/ocornut/imgui
 [submodule "external/submodules/atomic_queue"]
 	path = external/submodules/atomic_queue
-	url = https://github.com/max0x7ba/atomic_queue
+	url = https://ghfast.top/github.com/max0x7ba/atomic_queue
 [submodule "external/submodules/mesa"]
 	path = external/submodules/mesa
-	url = https://gitlab.freedesktop.org/mesa/mesa.git
+	url = https://ghfast.top/github.com/bminor/mesa-mesa.git
 [submodule "external/submodules/tbb"]
 	path = external/submodules/tbb
-	url = https://github.com/uxlfoundation/oneTBB
+	url = https://ghfast.top/github.com/uxlfoundation/oneTBB

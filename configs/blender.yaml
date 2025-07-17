@@ -1,7 +1,6 @@
 # Model Parameters
 sh_degree: 3
 init_points: 131_072
-# final_points: 4_194_304
 final_points: 524_288
 activation_scale: 1
 device: cuda
@@ -27,9 +26,9 @@ sh_factor: 0.02
 freeze_points: 18_000                  # Points are frozen after this cycle
 
 # Dataset Parameters
-dataset: "colmap"
-data_path: "../RadianceFieldStudio/data/mip360"
-scene: "garden"
+dataset: "blender"
+data_path: "../RadianceFieldStudio/data/blender"
+scene: "lego"
 patch_based: false
-downsample: [8, 4]                     # Image downsample factors
+downsample: [2, 1]                     # Image downsample factors
 downsample_iterations: [0, 5_000]

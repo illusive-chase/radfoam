@@ -2,8 +2,9 @@
 /build*/
 /dist/
 /data
-/radfoam/
+/src/radfoam/
 /*output*
+/temp*
 
 *.egg-info
 __pycache__
