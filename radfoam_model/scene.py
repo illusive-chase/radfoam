@@ -1,13 +1,12 @@
-import os
 import torch
-from torch import nn
 import torch.nn.functional as F
-from plyfile import PlyData, PlyElement
 import tqdm
+from plyfile import PlyData, PlyElement
+from torch import nn
 
 import radfoam
-from radfoam_model.render import TraceRays
 from radfoam_model.neus_renderer import TraceRaysNeuS
+from radfoam_model.render import TraceRays
 from radfoam_model.utils import *
 
 
@@ -304,7 +303,43 @@ class RadFoamScene(torch.nn.Module):
                 start_point,
                 depth_quantiles,
                 return_contribution,
+                False,
             )
+    
+    @torch.no_grad()
+    def forward_expected_depth(
+        self,
+        rays,
+        camera_eye,
+        camera_target,
+        start_point=None,
+    ):
+        points, attributes, point_adjacency, point_adjacency_offsets = (
+            self.get_trace_data()
+        )
+        att_depth = ((points - camera_eye) * camera_target).sum(-1, keepdim=True).clamp_min(0)
+        attributes = torch.cat([
+            att_depth.expand_as(self.att_dc).contiguous(),
+            torch.zeros_like(self.att_sh),
+            self.get_primal_density(),
+        ], dim=-1).to(self.attr_dtype)
+
+        if start_point is None:
+            start_point = self.get_starting_point(rays, points, self.aabb_tree)
+        else:
+            start_point = torch.broadcast_to(start_point, rays.shape[:-1])
+        return TraceRays.apply(
+            self.pipeline,
+            points,
+            attributes,
+            point_adjacency,
+            point_adjacency_offsets,
+            rays,
+            start_point,
+            None,
+            False,
+            True,
+        )[0][..., 2:]
 
     def update_viewer(self, viewer):
         points, attributes, point_adjacency, point_adjacency_offsets = (

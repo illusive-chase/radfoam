@@ -83,6 +83,7 @@ class Pipeline {
                                uint32_t *quantile_point_indices,
                                uint32_t *num_intersections,
                                void *point_contribution,
+                               bool raw_att,
                                // NeuS specific parameters - with defaults for backward compatibility
                                const void *sdf_network_weights = nullptr,
                                const void *color_network_weights = nullptr,
