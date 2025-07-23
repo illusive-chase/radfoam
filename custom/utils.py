@@ -50,12 +50,12 @@ class RadFoamProxy:
         self.device = device
 
     def get_gt_images(self) -> RGBAImages:
-        return RGBAImages(torch.cat((self.data_handler.rgbs, self.data_handler.alphas), dim=-1))
+        return RGBAImages(torch.cat((self.data_handler.rgbs, self.data_handler.alphas), dim=-1)).to(self.device)
     
     def get_cameras(self, *, colmap2blender: bool = True) -> Cameras:
         fx = torch.full((self.data_handler.c2ws.shape[0],), fill_value=self.data_handler.fx)
         fy = torch.full((self.data_handler.c2ws.shape[0],), fill_value=self.data_handler.fy)
-        c2w = self.data_handler.c2ws[:, :3, :]
+        c2w = self.data_handler.c2ws[:, :3, :].clone()
         if colmap2blender:
             c2w[:, :, 1:3] *= -1
         return Cameras(
@@ -81,10 +81,10 @@ class RadFoamProxy:
             ray_batch = ray_batch_fetcher.next()[0]
             output, _, _, _, _ = self.model(ray_batch, self.start_points[i])
             outputs.append(output)
-        return RGBAImages(torch.stack(output)).to(self.device)
+        return RGBAImages(torch.stack(outputs)).to(self.device)
     
-    def get_rgbds(self, *, progress_handle: Optional[Callable] = None) -> DepthImages:
-        cameras = self.get_cameras(colmap2blender=False)
+    def get_depths(self, *, progress_handle: Optional[Callable] = None) -> DepthImages:
+        cameras = self.get_cameras(colmap2blender=True)
         rays = self.data_handler.rays
         rng = range(rays.shape[0])
         if progress_handle is not None:
