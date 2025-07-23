@@ -21,10 +21,10 @@ class Script(Task):
         proxy = RadFoamProxy(self.load, device=self.device, split='test')
         cameras = proxy.get_cameras()
         with console.progress('Rendering', transient=True) as ptrack:
-            rgbds = proxy.get_rgbds(progress_handle=ptrack)
+            depths = proxy.get_depths(progress_handle=ptrack)
         pts = proxy.get_pts()
         with console.progress('Fusing', transient=True) as ptrack:
-            mesh = TriangleMesh.from_depth_fusion(depths=rgbds, cameras=cameras, progress_handle=ptrack)
+            mesh = TriangleMesh.from_depth_fusion(depths=depths, cameras=cameras, progress_handle=ptrack, depth_trunc=8)
         self.viser.show(pts=pts, fused=mesh, cameras=cameras)
 
 
