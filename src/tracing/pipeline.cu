@@ -27,7 +27,8 @@ __global__ void forward(TraceSettings settings,
                         float *__restrict__ quantile_depths,
                         uint32_t *__restrict__ quantile_point_indices,
                         uint32_t *__restrict__ num_intersections,
-                        attr_scalar *__restrict__ point_contribution) {
+                        attr_scalar *__restrict__ point_contribution,
+                        bool raw_att) {
 
     uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (thread_idx >= num_rays)
@@ -48,7 +49,7 @@ __global__ void forward(TraceSettings settings,
         const attr_scalar *attr_ptr = attributes + v_idx * attr_memory_size;
         s = (float)attr_ptr[attr_memory_size - 1];
         if (s > 1e-6f) {
-            rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
+            rgb = raw_att ? Vec3f(0.0f, 0.0f, (float)attr_ptr[0]) : load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr) ;
         } else {
             rgb = Vec3f::Zero();
         }
@@ -608,7 +609,8 @@ class CUDATracingPipeline : public Pipeline {
                        float *quantile_dpeths,
                        uint32_t *quantile_point_indices,
                        uint32_t *num_intersections,
-                       void *point_contribution) override {
+                       void *point_contribution,
+                       bool raw_att) override {
 
         CUDAArray<Vec4h> adjacent_diff(point_adjacency_size + 32);
         prefetch_adjacent_diff(reinterpret_cast<const Vec3f *>(points),
@@ -639,7 +641,8 @@ class CUDATracingPipeline : public Pipeline {
             quantile_dpeths,
             quantile_point_indices,
             num_intersections,
-            static_cast<attr_scalar *>(point_contribution));
+            static_cast<attr_scalar *>(point_contribution),
+            raw_att);
     }
 
     void trace_backward(const TraceSettings &settings,
