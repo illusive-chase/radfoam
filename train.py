@@ -20,6 +20,8 @@ from radfoam_model.scene import RadFoamScene
 from radfoam_model.utils import psnr
 import radfoam
 
+from rfstudio.graphics import Points
+from rfstudio.visualization import Visualizer
 
 seed = 42
 torch.random.manual_seed(seed)
@@ -214,8 +216,11 @@ def train(args, pipeline_args, model_args, optimizer_args, dataset_args):
 
                 model.optimizer.step()
                 model.update_learning_rate(i)
-
                 train.set_postfix(color_loss=f"{color_loss.mean().item():.5f}")
+
+                # --- Visualization: Save point cloud using Visualizer every 100 iterations ---
+               
+                # --- End visualization ---
 
                 if i % 100 == 99 and not pipeline_args.debug:
                     writer.add_scalar("train/rgb_loss", color_loss.mean(), i)

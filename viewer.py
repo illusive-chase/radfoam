@@ -40,6 +40,9 @@ def viewer(args, pipeline_args, model_args, optimizer_args, dataset_args):
 
     model.load_pt(f"{checkpoint}/model.pt")
 
+    # Extract Voronoi dots (primal points) as NumPy array
+    voronoi_dots = model.primal_points.detach().cpu().numpy()
+    print(f"Voronoi dots shape: {voronoi_dots.shape}")
     def viewer_init(viewer):
         model.update_viewer(viewer)
 
