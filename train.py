@@ -94,6 +94,7 @@ def train(args, pipeline_args, model_args, optimizer_args, dataset_args):
         device=device,
         points=train_data_handler.points3D,
         points_colors=train_data_handler.points3D_colors,
+        use_neus_renderer=model_args.use_neus_renderer,
     )
 
     # Setting up optimizer

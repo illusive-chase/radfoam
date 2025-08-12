@@ -7,15 +7,22 @@
 
 namespace radfoam {
 
+enum class RenderMode {
+    RadFoam = 0,
+    NeuS = 1,
+};
+
 struct TraceSettings {
     float weight_threshold;
     uint32_t max_intersections;
+    RenderMode render_mode;
 };
 
 inline TraceSettings default_trace_settings() {
     TraceSettings settings;
     settings.weight_threshold = 0.001f;
     settings.max_intersections = 1024;
+    settings.render_mode = RenderMode::NeuS;  // use NeuS as default
     return settings;
 }
 
@@ -75,7 +82,13 @@ class Pipeline {
                                float *quantile_dpeths,
                                uint32_t *quantile_point_indices,
                                uint32_t *num_intersections,
-                               void *point_contribution) = 0;
+                               void *point_contribution,
+                               // NeuS specific parameters - with defaults for backward compatibility
+                               const void *sdf_network_weights = nullptr,
+                               const void *color_network_weights = nullptr,
+                               const void *deviation_params = nullptr,
+                               float cos_anneal_ratio = 1.0f,
+                               uint32_t num_neus_samples = 64) = 0;
 
     virtual void trace_backward(const TraceSettings &settings,
                                 uint32_t num_points,
@@ -97,7 +110,12 @@ class Pipeline {
                                 Ray *ray_grad,
                                 Vec3f *points_grad,
                                 void *attribute_grad,
-                                void *point_error) = 0;
+                                void *point_error,
+                                // NeuS specific parameters - with defaults for backward compatibility
+                                void *sdf_network_grad = nullptr,
+                                void *color_network_grad = nullptr,
+                                void *deviation_grad = nullptr,
+                                float cos_anneal_ratio = 1.0f) = 0;
 
     virtual void trace_visualization(const TraceSettings &settings,
                                      const VisualizationSettings &vis_settings,

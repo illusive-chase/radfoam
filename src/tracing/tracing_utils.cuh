@@ -129,4 +129,43 @@ inline __device__ Vec3f colormap(float v,
     return map_vals[i0] * (1.0f - t) + map_vals[i1] * t;
 }
 
+// NeuS utility functions
+__forceinline__ __device__ float sigmoid(float x) {
+    return 1.0f / (1.0f + expf(-x));
+}
+
+__forceinline__ __device__ float compute_neus_alpha(
+    float prev_sdf, 
+    float next_sdf, 
+    float distance, 
+    float inv_s,
+    const Vec3f &ray_dir,
+    const Vec3f &gradient,
+    float cos_anneal_ratio) {
+    
+    float mid_sdf = (prev_sdf + next_sdf) * 0.5f;
+    float cos_val = (next_sdf - prev_sdf) / (distance + 1e-5f);
+    
+    // Apply cosine annealing
+    float true_cos = ray_dir.dot(gradient);
+    float iter_cos = -(fmaxf(-true_cos * 0.5f + 0.5f, 0.0f) * (1.0f - cos_anneal_ratio) + 
+                       fmaxf(-true_cos, 0.0f) * cos_anneal_ratio);
+    
+    float estimated_next_sdf = mid_sdf + iter_cos * distance * 0.5f;
+    float estimated_prev_sdf = mid_sdf - iter_cos * distance * 0.5f;
+    
+    float prev_cdf = sigmoid(estimated_prev_sdf * inv_s);
+    float next_cdf = sigmoid(estimated_next_sdf * inv_s);
+    
+    float p = prev_cdf - next_cdf;
+    float c = prev_cdf;
+    
+    return fminf(fmaxf((p + 1e-5f) / (c + 1e-5f), 0.0f), 1.0f);
+}
+
+__forceinline__ __device__ float compute_eikonal_loss(const Vec3f &gradient) {
+    float norm = gradient.norm();
+    return (norm - 1.0f) * (norm - 1.0f);
+}
+
 } // namespace radfoam

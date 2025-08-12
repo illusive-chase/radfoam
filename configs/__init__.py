@@ -61,6 +61,7 @@ class ModelParams(ParamGroup):
         self.final_points = 2_097_152
         self.activation_scale = 1.0
         self.device = "cuda"
+        self.use_neus_renderer = False  # Add NeuS renderer flag
         super().__init__(parser, "Setting Model parameters")
 
 
