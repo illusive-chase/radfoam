@@ -20,7 +20,7 @@ class TraceRays(torch.autograd.Function):
         start_point,
         depth_quantiles,
         return_contribution,
-        raw_att,
+        mode,
     ):
         ctx.rays = rays
         ctx.start_point = start_point
@@ -30,6 +30,9 @@ class TraceRays(torch.autograd.Function):
         ctx.attributes = _attributes
         ctx.point_adjacency = _point_adjacency
         ctx.point_adjacency_offsets = _point_adjacency_offsets
+        ctx.mode=mode
+
+        assert mode in [0, 1]
 
         results = pipeline.trace_forward(
             _points,
@@ -40,7 +43,7 @@ class TraceRays(torch.autograd.Function):
             start_point,
             depth_quantiles=depth_quantiles,
             return_contribution=return_contribution,
-            raw_att=raw_att,
+            mode=mode,
         )
         ctx.rgba = results["rgba"]
         ctx.depth_indices = results.get("depth_indices", None)
@@ -78,6 +81,7 @@ class TraceRays(torch.autograd.Function):
         _point_adjacency = ctx.point_adjacency
         _point_adjacency_offsets = ctx.point_adjacency_offsets
         depth_quantiles = ctx.depth_quantiles
+        mode = ctx.mode
 
         results = pipeline.trace_backward(
             _points,
@@ -92,6 +96,7 @@ class TraceRays(torch.autograd.Function):
             ctx.depth_indices,
             grad_depth,
             ctx.errbox.ray_error,
+            mode=mode,
         )
         points_grad = results["points_grad"]
         attr_grad = results["attr_grad"]

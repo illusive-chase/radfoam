@@ -36,6 +36,7 @@ class TraceRaysNeuS(torch.autograd.Function):
             start_point,
             depth_quantiles=depth_quantiles,
             return_contribution=return_contribution,
+            mode=2,
         )
         ctx.rgba = results["rgba"]
         ctx.depth_indices = results.get("depth_indices", None)
@@ -85,6 +86,7 @@ class TraceRaysNeuS(torch.autograd.Function):
             ctx.depth_indices,
             grad_depth,
             ctx.errbox.ray_error,
+            mode=2,
         )
         sdf_grad = results["sdf_grad"]
         color_grad = results["color_grad"]

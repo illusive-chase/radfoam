@@ -115,7 +115,7 @@ py::object trace_forward(Pipeline &self,
                          py::object weight_threshold,
                          py::object max_intersections,
                          bool return_contribution,
-                         bool raw_att) {
+                         int mode) {
     torch::Tensor points = points_in.contiguous();
     torch::Tensor attributes = attributes_in.contiguous();
     torch::Tensor point_adjacency = point_adjacency_in.contiguous();
@@ -249,7 +249,7 @@ py::object trace_forward(Pipeline &self,
             : nullptr,
         reinterpret_cast<uint32_t *>(num_intersections.data_ptr()),
         return_contribution ? output_contribution.data_ptr() : nullptr,
-        raw_att ? true: false);
+        static_cast<RenderMode>(mode));
 
     py::dict output_dict;
 
@@ -280,7 +280,8 @@ py::object trace_backward(Pipeline &self,
                           std::optional<torch::Tensor> depth_grad_in,
                           std::optional<torch::Tensor> ray_error_in,
                           py::object weight_threshold,
-                          py::object max_intersections) {
+                          py::object max_intersections,
+                          int mode) {
     torch::Tensor points = points_in.contiguous();
     torch::Tensor attributes = attributes_in.contiguous();
     torch::Tensor point_adjacency = point_adjacency_in.contiguous();
@@ -484,7 +485,8 @@ py::object trace_backward(Pipeline &self,
         reinterpret_cast<radfoam::Ray *>(ray_grad.data_ptr()),
         reinterpret_cast<radfoam::Vec3f *>(points_grad.data_ptr()),
         attr_grad.data_ptr(),
-        return_error ? point_error.data_ptr() : nullptr);
+        return_error ? point_error.data_ptr() : nullptr,
+        static_cast<RenderMode>(mode));
 
     py::dict output_dict;
 
@@ -639,7 +641,7 @@ void init_pipeline_bindings(py::module &module) {
              py::arg("weight_threshold") = py::none(),
              py::arg("max_intersections") = py::none(),
              py::arg("return_contribution") = false,
-             py::arg("raw_att") = false)
+             py::arg("mode") = 0)
         .def("trace_backward",
              trace_backward,
              py::arg("points"),
@@ -655,7 +657,8 @@ void init_pipeline_bindings(py::module &module) {
              py::arg("depth_grad_in") = py::none(),
              py::arg("ray_error") = py::none(),
              py::arg("weight_threshold") = py::none(),
-             py::arg("max_intersections") = py::none())
+             py::arg("max_intersections") = py::none(),
+             py::arg("mode") = 0)
         .def("trace_benchmark",
              trace_benchmark,
              py::arg("points"),

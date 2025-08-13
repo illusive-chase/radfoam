@@ -303,7 +303,7 @@ class RadFoamScene(torch.nn.Module):
                 start_point,
                 depth_quantiles,
                 return_contribution,
-                False,
+                0,
             )
     
     @torch.no_grad()
@@ -338,7 +338,7 @@ class RadFoamScene(torch.nn.Module):
             start_point,
             None,
             False,
-            True,
+            1,
         )[0][..., 2:]
 
     def update_viewer(self, viewer):

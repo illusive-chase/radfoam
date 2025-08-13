@@ -8,21 +8,20 @@
 namespace radfoam {
 
 enum class RenderMode {
-    RadFoam = 0,
-    NeuS = 1,
+    RadFoamRGB = 0,
+    RadFoamRaw = 1,
+    NeuS = 2,
 };
 
 struct TraceSettings {
     float weight_threshold;
     uint32_t max_intersections;
-    RenderMode render_mode;
 };
 
 inline TraceSettings default_trace_settings() {
     TraceSettings settings;
     settings.weight_threshold = 0.001f;
     settings.max_intersections = 1024;
-    settings.render_mode = RenderMode::NeuS;  // use NeuS as default
     return settings;
 }
 
@@ -83,7 +82,7 @@ class Pipeline {
                                uint32_t *quantile_point_indices,
                                uint32_t *num_intersections,
                                void *point_contribution,
-                               bool raw_att,
+                               RenderMode mode,
                                // NeuS specific parameters - with defaults for backward compatibility
                                const void *sdf_network_weights = nullptr,
                                const void *color_network_weights = nullptr,
@@ -112,6 +111,7 @@ class Pipeline {
                                 Vec3f *points_grad,
                                 void *attribute_grad,
                                 void *point_error,
+                                RenderMode mode,
                                 // NeuS specific parameters - with defaults for backward compatibility
                                 void *sdf_network_grad = nullptr,
                                 void *color_network_grad = nullptr,
