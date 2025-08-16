@@ -83,12 +83,10 @@ class Pipeline {
                                uint32_t *num_intersections,
                                void *point_contribution,
                                RenderMode mode,
-                               // NeuS specific parameters - with defaults for backward compatibility
-                               const void *sdf_network_weights = nullptr,
-                               const void *color_network_weights = nullptr,
-                               const void *deviation_params = nullptr,
-                               float cos_anneal_ratio = 1.0f,
-                               uint32_t num_neus_samples = 64) = 0;
+                               // NeuS specific parameters
+                               const float *deviation = nullptr,
+                               const Vec3f *gradients = nullptr,
+                               float cos_anneal_ratio = 0.0f) = 0;
 
     virtual void trace_backward(const TraceSettings &settings,
                                 uint32_t num_points,
@@ -112,11 +110,11 @@ class Pipeline {
                                 void *attribute_grad,
                                 void *point_error,
                                 RenderMode mode,
-                                // NeuS specific parameters - with defaults for backward compatibility
-                                void *sdf_network_grad = nullptr,
-                                void *color_network_grad = nullptr,
-                                void *deviation_grad = nullptr,
-                                float cos_anneal_ratio = 1.0f) = 0;
+                                // NeuS specific parameters
+                                const float *deviation = nullptr,
+                                float *deviation_grad = nullptr,
+                                const Vec3f* gradients = nullptr,
+                                float cos_anneal_ratio = 0.0f) = 0;
 
     virtual void trace_visualization(const TraceSettings &settings,
                                      const VisualizationSettings &vis_settings,

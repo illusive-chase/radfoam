@@ -57,18 +57,12 @@ class RadFoamScene(torch.nn.Module):
                 dtype=self.attr_dtype,
             )
         )
+        if use_neus_renderer:
+            self.deviation = nn.Parameter(torch.full(1, fill_value=0.1, device=device, dtype=self.attr_dtype))
+        else:
+            self.deviation = None
 
         self.pipeline = radfoam.create_pipeline(self.sh_degree, self.attr_dtype)
-        
-        # Neural field placeholders for NeuS renderer
-        # These will be implemented by your teammate
-        if self.use_neus_renderer:
-            # TODO: Replace these with actual neural field implementations
-            self.sdf_field = None      # Will be implemented by teammate
-            self.color_field = None    # Will be implemented by teammate  
-            self.deviation_field = None # Will be implemented by teammate
-            print("Warning: NeuS renderer selected but neural fields not yet implemented!")
-            print("Please implement sdf_field, color_field, and deviation_field")
 
     def random_initialize(self):
         primal_points = (
@@ -251,48 +245,39 @@ class RadFoamScene(torch.nn.Module):
         start_point=None,
         depth_quantiles=None,
         return_contribution=False,
+        gradients=None,
+        cos_anneal_ratio=0.0,
     ):
+        
+        # Use original RadFoam renderer with point clouds
+        points, attributes, point_adjacency, point_adjacency_offsets = (
+            self.get_trace_data()
+        )
+
+        if start_point is None:
+            start_point = self.get_starting_point(rays, points, self.aabb_tree)
+        else:
+            start_point = torch.broadcast_to(start_point, rays.shape[:-1])
+
         if self.use_neus_renderer:
-            # Use NeuS renderer with neural fields
-            missing_fields = []
-            field_names = ['sdf_field', 'color_field', 'deviation_field']
-            fields = [self.sdf_field, self.color_field, self.deviation_field]
-            
-            for name, field in zip(field_names, fields):
-                if field is None:
-                    missing_fields.append(name)
-            
-            if missing_fields:
-                missing_str = ", ".join(missing_fields)
-                raise RuntimeError(f"Neural fields not properly initialized! Missing: {missing_str}. Please implement these fields for NeuS rendering.")
-            
-            if start_point is None:
-                # For NeuS, we don't need specific starting points as it uses SDF sampling
-                start_point = torch.zeros(rays.shape[:-1], device=rays.device, dtype=torch.uint32)
-            else:
-                start_point = torch.broadcast_to(start_point, rays.shape[:-1])
-                
+            if gradients is None:
+                raise ValueError("gradients must be provided for NeuS renderer")
+            deviation = torch.exp(self.deviation * 10).clamp(1e-6, 1e6)
             return TraceRaysNeuS.apply(
-                self.pipeline,  # Use the same pipeline, it handles NeuS mode internally
-                self.sdf_field,
-                self.color_field,
-                self.deviation_field,
+                self.pipeline,  # Use the same pipeline, it handles NeuS mode
+                points,
+                attributes,
+                point_adjacency,
+                point_adjacency_offsets,
                 rays,
                 start_point,
                 depth_quantiles,
                 return_contribution,
+                deviation,
+                gradients,
+                cos_anneal_ratio,
             )
         else:
-            # Use original RadFoam renderer with point clouds
-            points, attributes, point_adjacency, point_adjacency_offsets = (
-                self.get_trace_data()
-            )
-
-            if start_point is None:
-                start_point = self.get_starting_point(rays, points, self.aabb_tree)
-            else:
-                start_point = torch.broadcast_to(start_point, rays.shape[:-1])
-                
             return TraceRays.apply(
                 self.pipeline,
                 points,

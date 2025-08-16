@@ -11,32 +11,44 @@ class TraceRaysNeuS(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        neus_pipeline,
-        sdf_field,
-        color_field,
-        deviation_field,
+        pipeline,
+        _points,
+        _attributes,
+        _point_adjacency,
+        _point_adjacency_offsets,
         rays,
         start_point,
         depth_quantiles,
         return_contribution,
+        _deviation,
+        gradients,
+        cos_anneal_ratio,
     ):
         ctx.rays = rays
         ctx.start_point = start_point
         ctx.depth_quantiles = depth_quantiles
-        ctx.neus_pipeline = neus_pipeline
-        ctx.sdf_field = sdf_field
-        ctx.color_field = color_field
-        ctx.deviation_field = deviation_field
+        ctx.pipeline = pipeline
+        ctx.points = _points
+        ctx.attributes = _attributes
+        ctx.point_adjacency = _point_adjacency
+        ctx.point_adjacency_offsets = _point_adjacency_offsets
+        ctx.deviation = _deviation
+        ctx.gradients = gradients
+        ctx.cos_anneal_ratio = cos_anneal_ratio
 
-        results = neus_pipeline.trace_forward(
-            sdf_field,
-            color_field,
-            deviation_field,
+        results = pipeline.trace_forward(
+            _points,
+            _attributes,
+            _point_adjacency,
+            _point_adjacency_offsets,
             rays,
             start_point,
             depth_quantiles=depth_quantiles,
             return_contribution=return_contribution,
             mode=2,
+            deviation=_deviation,
+            gradients=gradients,
+            cos_anneal_ratio=cos_anneal_ratio,
         )
         ctx.rgba = results["rgba"]
         ctx.depth_indices = results.get("depth_indices", None)
@@ -67,17 +79,22 @@ class TraceRaysNeuS(torch.autograd.Function):
 
         rays = ctx.rays
         start_point = ctx.start_point
-        neus_pipeline = ctx.neus_pipeline
+        pipeline = ctx.pipeline
         rgba = ctx.rgba
-        sdf_field = ctx.sdf_field
-        color_field = ctx.color_field
-        deviation_field = ctx.deviation_field
+        _points = ctx.points
+        _attributes = ctx.attributes
+        _point_adjacency = ctx.point_adjacency
+        _point_adjacency_offsets = ctx.point_adjacency_offsets
         depth_quantiles = ctx.depth_quantiles
+        _deviation = ctx.deviation
+        gradients = ctx.gradients
+        cos_anneal_ratio = ctx.cos_anneal_ratio
 
-        results = neus_pipeline.trace_backward(
-            sdf_field,
-            color_field,
-            deviation_field,
+        results = pipeline.trace_backward(
+            _points,
+            _attributes,
+            _point_adjacency,
+            _point_adjacency_offsets,
             rays,
             start_point,
             rgba,
@@ -87,37 +104,43 @@ class TraceRaysNeuS(torch.autograd.Function):
             grad_depth,
             ctx.errbox.ray_error,
             mode=2,
+            deviation=_deviation,
+            gradients=gradients,
+            cos_anneal_ratio=cos_anneal_ratio,
         )
-        sdf_grad = results["sdf_grad"]
-        color_grad = results["color_grad"]
+        points_grad = results["points_grad"]
+        attr_grad = results["attr_grad"]
         deviation_grad = results["deviation_grad"]
         ctx.errbox.point_error = results.get("point_error", None)
 
-        # Handle NaN gradients
-        if sdf_grad is not None:
-            sdf_grad[~sdf_grad.isfinite()] = 0
-        if color_grad is not None:
-            color_grad[~color_grad.isfinite()] = 0
-        if deviation_grad is not None:
-            deviation_grad[~deviation_grad.isfinite()] = 0
+        points_grad[~points_grad.isfinite()] = 0
+        attr_grad[~attr_grad.isfinite()] = 0
 
         del (
             ctx.rays,
             ctx.start_point,
-            ctx.neus_pipeline,
+            ctx.pipeline,
             ctx.rgba,
-            ctx.sdf_field,
-            ctx.color_field,
-            ctx.deviation_field,
+            ctx.points,
+            ctx.attributes,
+            ctx.point_adjacency,
+            ctx.point_adjacency_offsets,
             ctx.depth_quantiles,
+            ctx.deviation,
+            ctx.gradients,
+            ctx.cos_anneal_ratio,
         )
         return (
-            None,  # neus_pipeline
-            sdf_grad,  # sdf_field
-            color_grad,  # color_field
-            deviation_grad,  # deviation_field
+            None,  # pipeline
+            points_grad,  # _points
+            attr_grad,  # _attributes
+            None,  # _point_adjacency
+            None,  # _point_adjacency_offsets
             None,  # rays
             None,  # start_point
             None,  # depth_quantiles
             None,  # return_contribution
+            deviation_grad, # _deviation
+            None, # gradients
+            None, # cos_anneal_ratio
         )

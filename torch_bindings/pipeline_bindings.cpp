@@ -115,7 +115,10 @@ py::object trace_forward(Pipeline &self,
                          py::object weight_threshold,
                          py::object max_intersections,
                          bool return_contribution,
-                         int mode) {
+                         int mode,
+                         std::optional<torch::Tensor> deviation_in,
+                         std::optional<torch::Tensor> gradients_in,
+                         float cos_anneal_ratio) {
     torch::Tensor points = points_in.contiguous();
     torch::Tensor attributes = attributes_in.contiguous();
     torch::Tensor point_adjacency = point_adjacency_in.contiguous();
@@ -173,6 +176,16 @@ py::object trace_forward(Pipeline &self,
             throw std::runtime_error("depth_quantiles must have the same batch "
                                      "size as rays");
         }
+    }
+
+    torch::Tensor deviation;
+    if (deviation_in.has_value()) {
+        deviation = deviation_in.value().contiguous();
+    }
+
+    torch::Tensor gradients;
+    if (gradients_in.has_value()) {
+        gradients = gradients_in.value().contiguous();
     }
 
     TraceSettings settings = default_trace_settings();
@@ -249,7 +262,10 @@ py::object trace_forward(Pipeline &self,
             : nullptr,
         reinterpret_cast<uint32_t *>(num_intersections.data_ptr()),
         return_contribution ? output_contribution.data_ptr() : nullptr,
-        static_cast<RenderMode>(mode));
+        static_cast<RenderMode>(mode),
+        deviation_in.has_value() ? reinterpret_cast<const float *>(deviation.data_ptr()) : nullptr,
+        gradients_in.has_value() ? reinterpret_cast<const radfoam::Vec3f *>(gradients.data_ptr()) : nullptr,
+        cos_anneal_ratio);
 
     py::dict output_dict;
 
@@ -281,7 +297,10 @@ py::object trace_backward(Pipeline &self,
                           std::optional<torch::Tensor> ray_error_in,
                           py::object weight_threshold,
                           py::object max_intersections,
-                          int mode) {
+                          int mode,
+                          std::optional<torch::Tensor> deviation_in,
+                          std::optional<torch::Tensor> gradients_in,
+                          float cos_anneal_ratio) {
     torch::Tensor points = points_in.contiguous();
     torch::Tensor attributes = attributes_in.contiguous();
     torch::Tensor point_adjacency = point_adjacency_in.contiguous();
@@ -298,6 +317,7 @@ py::object trace_backward(Pipeline &self,
 
     bool return_depth = depth_quantiles_in.has_value();
     bool return_error = ray_error_in.has_value();
+    bool return_deviation = deviation_in.has_value();
 
     uint32_t num_points = points.size(0);
     uint32_t point_adjacency_size = point_adjacency.size(0);
@@ -433,6 +453,16 @@ py::object trace_backward(Pipeline &self,
                 .device(rays.device()));
     }
 
+    torch::Tensor deviation;
+    if (return_deviation) {
+        deviation = deviation_in.value().contiguous();
+    }
+
+    torch::Tensor gradients;
+    if (gradients_in.has_value()) {
+        gradients = gradients_in.value().contiguous();
+    }
+
     TraceSettings settings = default_trace_settings();
     if (!weight_threshold.is_none()) {
         settings.weight_threshold = weight_threshold.cast<float>();
@@ -454,6 +484,11 @@ py::object trace_backward(Pipeline &self,
 
     torch::Tensor points_grad = torch::zeros(
         points_grad_shape, torch::dtype(rays.dtype()).device(rays.device()));
+
+    torch::Tensor deviation_grad;
+    if (return_deviation) {
+        deviation_grad = torch::zeros_like(deviation);
+    }
 
     torch::Tensor ray_grad = torch::empty_like(rays);
 
@@ -486,7 +521,12 @@ py::object trace_backward(Pipeline &self,
         reinterpret_cast<radfoam::Vec3f *>(points_grad.data_ptr()),
         attr_grad.data_ptr(),
         return_error ? point_error.data_ptr() : nullptr,
-        static_cast<RenderMode>(mode));
+        static_cast<RenderMode>(mode),
+        return_deviation ? reinterpret_cast<const float *>(deviation.data_ptr()) : nullptr,
+        return_deviation ? reinterpret_cast<float *>(deviation_grad.data_ptr()) : nullptr,
+        gradients_in.has_value() ? reinterpret_cast<const radfoam::Vec3f *>(gradients.data_ptr()) : nullptr,
+        cos_anneal_ratio
+        );
 
     py::dict output_dict;
 
@@ -495,6 +535,9 @@ py::object trace_backward(Pipeline &self,
     output_dict["ray_grad"] = ray_grad;
     if (return_error) {
         output_dict["point_error"] = point_error;
+    }
+    if (return_deviation) {
+        output_dict["deviation_grad"] = deviation_grad;
     }
 
     return output_dict;
@@ -641,7 +684,10 @@ void init_pipeline_bindings(py::module &module) {
              py::arg("weight_threshold") = py::none(),
              py::arg("max_intersections") = py::none(),
              py::arg("return_contribution") = false,
-             py::arg("mode") = 0)
+             py::arg("mode") = 0,
+             py::arg("deviation") = py::none(),
+             py::arg("gradients") = py::none(),
+             py::arg("cos_anneal_ratio") = 1.0f)
         .def("trace_backward",
              trace_backward,
              py::arg("points"),
@@ -658,7 +704,10 @@ void init_pipeline_bindings(py::module &module) {
              py::arg("ray_error") = py::none(),
              py::arg("weight_threshold") = py::none(),
              py::arg("max_intersections") = py::none(),
-             py::arg("mode") = 0)
+             py::arg("mode") = 0,
+             py::arg("deviation") = py::none(),
+             py::arg("gradients") = py::none(),
+             py::arg("cos_anneal_ratio") = 1.0f)
         .def("trace_benchmark",
              trace_benchmark,
              py::arg("points"),

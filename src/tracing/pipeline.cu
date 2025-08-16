@@ -141,78 +141,106 @@ __global__ void forward_neus(TraceSettings settings,
                             const Ray *__restrict__ rays,
                             uint32_t num_rays,
                             const uint32_t *__restrict__ start_point_index,
-                            uint32_t num_neus_samples,
-                            float cos_anneal_ratio,
-                            // Neural field placeholders - to be replaced with actual network evaluations
-                            const void *sdf_network_weights,
-                            const void *color_network_weights, 
-                            const void *deviation_params,
+                            uint32_t num_depth_quantiles,
+                            const float *__restrict__ depth_quantiles,
                             attr_scalar *__restrict__ ray_rgba,
-                            uint32_t *__restrict__ num_intersections) {
+                            float *__restrict__ quantile_depths,
+                            uint32_t *__restrict__ quantile_point_indices,
+                            uint32_t *__restrict__ num_intersections,
+                            attr_scalar *__restrict__ point_contribution,
+                            // Neural field placeholders - to be replaced with actual network evaluations
+                            const attr_scalar *__restrict__ deviation,
+                            const Vec3f *__restrict__ gradients,
+                            float cos_anneal_ratio) {
 
     uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (thread_idx >= num_rays)
         return;
 
+    constexpr int sh_dim = 3 * (1 + sh_degree) * (1 + sh_degree);
+    constexpr int attr_memory_size = 1 + sh_dim;
+
     Ray ray = rays[thread_idx];
     ray.direction /= ray.direction.norm();
 
+    const float *ray_depth_quantiles =
+        depth_quantiles + thread_idx * num_depth_quantiles;
+
+    auto sh_coeffs = sh_coefficients<sh_degree>(ray.direction);
+
+    auto load_attributes = [&](uint32_t v_idx, Vec3f &rgb, float &s, Vec3f &g) {
+        const attr_scalar *attr_ptr = attributes + v_idx * attr_memory_size;
+        s = (float)attr_ptr[attr_memory_size - 1];
+        g = gradients[v_idx];
+        if (s > 1e-6f) {
+            rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
+        } else {
+            rgb = Vec3f::Zero();
+        }
+    };
+
     float transmittance = 1.0f;
+    float inv_s = *deviation;
     Vec3f accumulated_rgb = Vec3f::Zero();
-    uint32_t total_samples = 0;
+
+    uint32_t current_quantile_idx = 0;
+    float current_quantile;
+    if (depth_quantiles) {
+        current_quantile = ray_depth_quantiles[current_quantile_idx];
+    }
     
     // NeuS cell functor - evaluates SDF field within each Voronoi cell segment
     auto functor = [&](uint32_t point_idx,
+                       uint32_t prev_point_idx,
+                       uint32_t next_point_idx,
                        float t_0,
                        float t_1,
                        const Vec3f &current_point,
                        const Vec3f &next_point) {
+
+        Vec3f rgb_primal, g_primal;
+        float s_primal;
+
+        load_attributes(point_idx, rgb_primal, s_primal, g_primal);
         
         float delta_t = fmaxf(t_1 - t_0, 0.0f);
-        if (delta_t < 1e-6f) return true; // Skip degenerate segments
+        float true_cos = ray.direction.dot(g_primal);
+        float iter_cos = -(fmaxf(-true_cos * 0.5f + 0.5f, 0.0f) * (1.0f - cos_anneal_ratio) + fmaxf(-true_cos, 0.0f) * cos_anneal_ratio);
         
-        // Sample SDF field within this cell segment
-        // Number of samples proportional to segment length
-        uint32_t samples_in_segment = fmaxf(1, (uint32_t)(delta_t * num_neus_samples / 10.0f));
-        samples_in_segment = fminf(samples_in_segment, 32); // Cap max samples per segment
+        float estimated_next_sdf = s_primal + iter_cos * delta_t * 0.5f;
+        float estimated_prev_sdf = s_primal - iter_cos * delta_t * 0.5f;
         
-        for (uint32_t i = 0; i < samples_in_segment; ++i) {
-            float t = t_0 + delta_t * (i + 0.5f) / samples_in_segment;
-            Vec3f sample_point = ray.origin + t * ray.direction;
-            
-            // TODO: Replace with actual neural network evaluation
-            // For now, use placeholder SDF based on distance to Voronoi cell center
-            Vec3f cell_center = current_point; // Use current Voronoi cell center
-            float dist_to_center = (sample_point - cell_center).norm();
-            float sdf_value = 0.1f - dist_to_center + 0.5f; // Cell-centered SDF placeholder
-            Vec3f gradient = (sample_point - cell_center).normalized(); // Gradient toward cell center
-            Vec3f color = Vec3f(0.8f, 0.6f, 0.4f); // Placeholder color
-            
-            // Get next sample for alpha computation
-            float next_t = (i + 1 < samples_in_segment) ? 
-                t_0 + delta_t * (i + 1.5f) / samples_in_segment : t_1;
-            Vec3f next_sample_point = ray.origin + next_t * ray.direction;
-            float next_dist = (next_sample_point - cell_center).norm();
-            float next_sdf = 0.1f - next_dist + 0.5f; // Placeholder
-            
-            float sample_distance = next_t - t;
-            float inv_s = 64.0f; // Base variance, should come from deviation_params
-            
-            float alpha = compute_neus_alpha(
-                sdf_value, next_sdf, sample_distance, inv_s, 
-                ray.direction, gradient, cos_anneal_ratio);
-            
-            float weight = transmittance * alpha;
-            accumulated_rgb += weight * color;
-            
-            transmittance *= (1.0f - alpha);
-            total_samples++;
-            
-            if (transmittance < settings.weight_threshold) {
-                return false; // Early termination
+        float prev_cdf = sigmoid(estimated_prev_sdf * inv_s);
+        float next_cdf = sigmoid(estimated_next_sdf * inv_s);
+        
+        float p = prev_cdf - next_cdf;
+        float c = prev_cdf;
+        
+        float alpha = fminf(fmaxf((p + 1e-5f) / (c + 1e-5f), 0.0f), 1.0f);
+        float weight = transmittance * alpha;
+
+        if (point_contribution) {
+            atomicAdd(point_contribution + point_idx, (attr_scalar)weight);
+        }
+        accumulated_rgb += weight * rgb_primal;
+
+        float next_transmittance = transmittance * (1 - alpha);
+        while (current_quantile_idx < num_depth_quantiles &&
+               next_transmittance < current_quantile) {
+            float quant_sdf = -logf(fmaxf(1e-5f, 1.0f / (current_quantile / transmittance * prev_cdf + 1e-5f) - 1.0f)) / inv_s;
+            quantile_depths[thread_idx * num_depth_quantiles +
+                            current_quantile_idx] =
+                t_0 + (quant_sdf - estimated_prev_sdf) / iter_cos;
+            quantile_point_indices[thread_idx * num_depth_quantiles +
+                                   current_quantile_idx] = point_idx;
+            current_quantile_idx++;
+            if (current_quantile_idx < num_depth_quantiles) {
+                current_quantile = ray_depth_quantiles[current_quantile_idx];
             }
         }
-        
+
+        transmittance = next_transmittance;
+
         return transmittance > settings.weight_threshold;
     };
 
@@ -227,14 +255,21 @@ __global__ void forward_neus(TraceSettings settings,
                                       settings.max_intersections,
                                       functor);
 
-    // Output RGBA
+    while (current_quantile_idx < num_depth_quantiles) {
+        quantile_depths[thread_idx * num_depth_quantiles +
+                        current_quantile_idx] = -1.0f;
+        quantile_point_indices[thread_idx * num_depth_quantiles +
+                               current_quantile_idx] = UINT32_MAX;
+        current_quantile_idx++;
+    }
+
     for (uint32_t i = 0; i < 3; ++i) {
         ray_rgba[thread_idx * 4 + i] = attr_scalar(accumulated_rgb[i]);
     }
-    ray_rgba[thread_idx * 4 + 3] = attr_scalar(1.0f - transmittance);
+    ray_rgba[thread_idx * 4 + 3] = attr_scalar(1 - transmittance);
 
     if (num_intersections)
-        num_intersections[thread_idx] = total_samples;
+        num_intersections[thread_idx] = n;
 }
 
 template <typename attr_scalar, int sh_degree, int block_size>
@@ -461,16 +496,22 @@ __global__ void backward_neus(TraceSettings settings,
                              const Ray *__restrict__ rays,
                              uint32_t num_rays,
                              const uint32_t *__restrict__ start_point_index,
-                             uint32_t num_neus_samples,
-                             float cos_anneal_ratio,
+                             uint32_t num_depth_quantiles,
+                             const float *__restrict__ depth_quantiles,
+                             const uint32_t *__restrict__ quantile_point_indices,
                              const attr_scalar *__restrict__ ray_rgba,
                              const attr_scalar *__restrict__ ray_rgba_grad,
-                             // Neural field gradients - placeholders
-                             void *sdf_network_grad,
-                             void *color_network_grad,
-                             void *deviation_grad,
+                             const float *__restrict__ depth_grad,
+                             const attr_scalar *__restrict__ ray_error,
                              Ray *__restrict__ ray_grad,
-                             Vec3f *__restrict__ points_grad) {
+                             Vec3f *__restrict__ points_grad,
+                             attr_scalar *__restrict__ attribute_grad,
+                             attr_scalar *__restrict__ point_error,
+                             // NeuS specific
+                             const attr_scalar *__restrict__ deviation,
+                             attr_scalar *__restrict__ deviation_grad,
+                             const Vec3f *__restrict__ gradients,
+                             float cos_anneal_ratio) {
 
     uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (thread_idx >= num_rays)
@@ -503,7 +544,7 @@ __global__ void backward_neus(TraceSettings settings,
         if (delta_t < 1e-6f) return true; // Skip degenerate segments
         
         // Match forward pass sampling
-        uint32_t samples_in_segment = fmaxf(1, (uint32_t)(delta_t * num_neus_samples / 10.0f));
+        uint32_t samples_in_segment = fmaxf(1, (uint32_t)(delta_t * num_depth_quantiles / 10.0f));
         samples_in_segment = fminf(samples_in_segment, 32);
         
         for (uint32_t i = 0; i < samples_in_segment; ++i) {
@@ -863,12 +904,10 @@ class CUDATracingPipeline : public Pipeline {
                        uint32_t *num_intersections,
                        void *point_contribution,
                        RenderMode mode,
-                       // NeuS specific parameters - with defaults for backward compatibility
-                       const void *sdf_network_weights = nullptr,
-                       const void *color_network_weights = nullptr,
-                       const void *deviation_params = nullptr,
-                       float cos_anneal_ratio = 1.0f,
-                       uint32_t num_neus_samples = 64) override {
+                       // NeuS specific parameters
+                       const float* deviation,
+                       const Vec3f* gradients,
+                       float cos_anneal_ratio) override {
 
         if (mode == RenderMode::NeuS) {
             // NeuS rendering path - uses Voronoi cell traversal like RadFoam
@@ -895,13 +934,16 @@ class CUDATracingPipeline : public Pipeline {
                 rays,
                 num_rays,
                 start_point_index,
-                num_neus_samples,
-                cos_anneal_ratio,
-                sdf_network_weights,
-                color_network_weights,
-                deviation_params,
+                num_depth_quantiles,
+                depth_quantiles,
                 static_cast<attr_scalar *>(ray_rgba),
-                num_intersections);
+                quantile_dpeths,
+                quantile_point_indices,
+                num_intersections,
+                static_cast<attr_scalar *>(point_contribution),
+                static_cast<const attr_scalar *>(deviation),
+                gradients,
+                cos_anneal_ratio);
         } else {
             // Original RadFoam rendering path
             CUDAArray<Vec4h> adjacent_diff(point_adjacency_size + 32);
@@ -960,11 +1002,11 @@ class CUDATracingPipeline : public Pipeline {
                         void *attribute_grad,
                         void *point_error,
                         RenderMode mode,
-                        // NeuS specific parameters - with defaults for backward compatibility
-                        void *sdf_network_grad = nullptr,
-                        void *color_network_grad = nullptr,
-                        void *deviation_grad = nullptr,
-                        float cos_anneal_ratio = 1.0f) override {
+                        // NeuS specific parameters
+                        const float* deviation,
+                        float* deviation_grad,
+                        const Vec3f* gradients,
+                        float cos_anneal_ratio) override {
 
         if (mode == RenderMode::NeuS) {
             // NeuS backward path - uses Voronoi cell traversal
@@ -991,15 +1033,21 @@ class CUDATracingPipeline : public Pipeline {
                 rays,
                 num_rays,
                 start_point_index,
-                64, // num_neus_samples - should match forward or be parameter
-                cos_anneal_ratio,
+                num_depth_quantiles,
+                depth_quantiles,
+                quantile_point_indices,
                 static_cast<const attr_scalar *>(ray_rgba),
                 static_cast<const attr_scalar *>(ray_rgba_grad),
-                sdf_network_grad,
-                color_network_grad,
-                deviation_grad,
+                depth_grad,
+                static_cast<const attr_scalar *>(ray_error),
                 ray_grad,
-                points_grad);
+                points_grad,
+                static_cast<attr_scalar *>(attribute_grad),
+                static_cast<attr_scalar *>(point_error),
+                static_cast<const attr_scalar *>(deviation),
+                static_cast<attr_scalar *>(deviation_grad),
+                gradients,
+                cos_anneal_ratio);
         } else {
             // Original RadFoam backward path
             CUDAArray<Vec4h> adjacent_diff(point_adjacency_size + 32);
