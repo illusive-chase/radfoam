@@ -16,13 +16,19 @@ class Script(Task):
 
     load: Path = ...
     viser: Visualizer = Visualizer()
+    only_vis: bool = False
 
     def run(self) -> None:
-        proxy = RadFoamProxy(self.load, device=self.device, split='test')
+        proxy = RadFoamProxy.from_radfoam(self.load, device=self.device, split='test')
         cameras = proxy.get_cameras()
+        pts = proxy.get_pts()
+
+        if self.only_vis:
+            self.viser.show(pts=pts, cameras=cameras)
+            return
+
         with console.progress('Rendering', transient=True) as ptrack:
             depths = proxy.get_depths(progress_handle=ptrack)
-        pts = proxy.get_pts()
         with console.progress('Fusing', transient=True) as ptrack:
             mesh = TriangleMesh.from_depth_fusion(depths=depths, cameras=cameras, progress_handle=ptrack, depth_trunc=8)
         self.viser.show(pts=pts, fused=mesh, cameras=cameras)

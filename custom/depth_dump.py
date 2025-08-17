@@ -20,7 +20,7 @@ class Script(Task):
 
     def run(self) -> None:
         assert not self.output.exists() or self.output.is_dir()
-        proxy = RadFoamProxy(self.load, device=self.device, split='test')
+        proxy = RadFoamProxy.from_radfoam(self.load, device=self.device, split='test')
         with console.progress('Rendering Depth', transient=True) as ptrack:
             depths = proxy.get_depths(progress_handle=ptrack)
         if self.rgb:

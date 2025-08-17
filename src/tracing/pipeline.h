@@ -84,7 +84,7 @@ class Pipeline {
                                void *point_contribution,
                                RenderMode mode,
                                // NeuS specific parameters
-                               const float *deviation = nullptr,
+                               const void *deviation = nullptr,
                                const Vec3f *gradients = nullptr,
                                float cos_anneal_ratio = 0.0f) = 0;
 
@@ -111,8 +111,8 @@ class Pipeline {
                                 void *point_error,
                                 RenderMode mode,
                                 // NeuS specific parameters
-                                const float *deviation = nullptr,
-                                float *deviation_grad = nullptr,
+                                const void *deviation = nullptr,
+                                void *deviation_grad = nullptr,
                                 const Vec3f* gradients = nullptr,
                                 float cos_anneal_ratio = 0.0f) = 0;
 

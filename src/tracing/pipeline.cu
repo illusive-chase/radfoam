@@ -191,8 +191,6 @@ __global__ void forward_neus(TraceSettings settings,
     
     // NeuS cell functor - evaluates SDF field within each Voronoi cell segment
     auto functor = [&](uint32_t point_idx,
-                       uint32_t prev_point_idx,
-                       uint32_t next_point_idx,
                        float t_0,
                        float t_1,
                        const Vec3f &current_point,
@@ -567,10 +565,7 @@ __global__ void backward_neus(TraceSettings settings,
             float sample_distance = next_t - t;
             float inv_s = 64.0f;
             
-            float alpha = compute_neus_alpha(
-                sdf_value, next_sdf, sample_distance, inv_s, 
-                ray.direction, gradient, cos_anneal_ratio);
-            
+            float alpha = 0.0f;
             float weight = transmittance * alpha;
             
             // Gradient computation
@@ -905,7 +900,7 @@ class CUDATracingPipeline : public Pipeline {
                        void *point_contribution,
                        RenderMode mode,
                        // NeuS specific parameters
-                       const float* deviation,
+                       const void* deviation,
                        const Vec3f* gradients,
                        float cos_anneal_ratio) override {
 
@@ -1003,8 +998,8 @@ class CUDATracingPipeline : public Pipeline {
                         void *point_error,
                         RenderMode mode,
                         // NeuS specific parameters
-                        const float* deviation,
-                        float* deviation_grad,
+                        const void* deviation,
+                        void* deviation_grad,
                         const Vec3f* gradients,
                         float cos_anneal_ratio) override {
 
