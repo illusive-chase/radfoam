@@ -58,11 +58,27 @@ class RadFoamScene(torch.nn.Module):
             )
         )
         if use_neus_renderer:
-            self.deviation = nn.Parameter(torch.full(1, fill_value=0.1, device=device, dtype=self.attr_dtype))
+            self.deviation = nn.Parameter(torch.full((1,), fill_value=0.1, device=device, dtype=self.attr_dtype))
+            # These will be set during conversion from NeuS model
+            self.neus_model = None
+            self.sdf_field = None
         else:
             self.deviation = None
 
         self.pipeline = radfoam.create_pipeline(self.sh_degree, self.attr_dtype)
+    
+    def compute_gradients_at_points(self, sample_points):
+        """Compute SDF gradients at sample points using the stored NeuS model."""
+        if self.sdf_field is None:
+            raise ValueError("NeuS SDF field not initialized")
+        
+        # Compute SDF gradients in chunks to avoid OOM
+        gradients = []
+        for pts_chunk in torch.split(sample_points, 1024):
+            _, _, gradients_chunk = self.sdf_field.sdf_mlp.get_sdf_gradient(pts_chunk)
+            gradients.append(gradients_chunk)
+        
+        return torch.cat(gradients, dim=0)
 
     def random_initialize(self):
         primal_points = (
@@ -206,7 +222,12 @@ class RadFoamScene(torch.nn.Module):
         )
 
     def get_primal_density(self):
-        return self.activation_scale * F.softplus(self.density, beta=10)
+        if self.use_neus_renderer:
+            # For NeuS, density stores SDF values directly
+            return self.density
+        else:
+            # For NeRF, apply softplus activation to get density
+            return self.activation_scale * F.softplus(self.density, beta=10)
 
     def get_primal_attributes(self):
         return torch.cat([self.att_dc, self.att_sh], dim=-1)
@@ -260,8 +281,14 @@ class RadFoamScene(torch.nn.Module):
             start_point = torch.broadcast_to(start_point, rays.shape[:-1])
 
         if self.use_neus_renderer:
-            if gradients is None:
-                raise ValueError("gradients must be provided for NeuS renderer")
+            # Compute gradients during rendering at sample points
+            if self.sdf_field is None:
+                raise ValueError("NeuS SDF field not initialized for gradient computation")
+            
+            # For NeuS rendering, we need to compute gradients at the points where rays intersect
+            # This is a simplified approach - in practice, gradients should be computed at ray sample points
+            computed_gradients = self.compute_gradients_at_points(points)
+            
             deviation = torch.exp(self.deviation * 10).clamp(1e-6, 1e6)
             return TraceRaysNeuS.apply(
                 self.pipeline,  # Use the same pipeline, it handles NeuS mode
@@ -274,7 +301,7 @@ class RadFoamScene(torch.nn.Module):
                 depth_quantiles,
                 return_contribution,
                 deviation,
-                gradients,
+                computed_gradients,
                 cos_anneal_ratio,
             )
         else:

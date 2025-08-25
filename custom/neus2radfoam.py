@@ -17,14 +17,14 @@ from .utils import RadFoamProxy
 
 @dataclass
 class Script(Task):
-    """Load a checkpoint from a rfstudio-trained nerf into radfoam and dump depth images."""
+    """Load a checkpoint from a rfstudio-trained NeuS into radfoam and dump depth/RGB images."""
 
     load: Path = ...
     mesh_proxy: Optional[Path] = None
     output: Optional[Path] = None
     rgb: bool = True
 
-    num_points: int = 524_288
+    num_points: int = 124_288
     bg: float = 0.0
     viser: Visualizer = Visualizer()
     debug: bool = False
@@ -41,10 +41,11 @@ class Script(Task):
             pts = mesh.uniformly_sample(self.num_points)
             pts.positions.add_(torch.randn_like(pts.positions) * 0.04)
             vis['mesh_proxy'] = mesh
+            console.print(f"Loaded proxy mesh from {self.mesh_proxy}, sampled {len(pts)} points.")
 
-        # 1. Create RadFoamProxy from the NeRF model
-        with console.status("Creating RadFoam model from NeRF..."):
-            proxy = RadFoamProxy.from_nerf(
+        # 1. Create RadFoamProxy from the NeuS model
+        with console.status("Creating RadFoam model from NeuS..."):
+            proxy = RadFoamProxy.from_neus(
                 self.load,
                 points=pts,
                 device=self.device,
@@ -55,7 +56,7 @@ class Script(Task):
             vis['cameras'] = cameras
             vis['cell_centers'] = pts
 
-        console.print("RadFoam model created from NeRF.")
+        console.print("RadFoam model created from NeuS.")
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -66,6 +67,7 @@ class Script(Task):
                 sdf_values= torch.zeros_like(pts.positions[..., :1]),
             )
             vis['tet'] = tet
+            self.viser.show(**vis)
 
         if self.output is None:
             self.viser.show(**vis)
