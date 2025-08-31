@@ -1,18 +1,19 @@
 from __future__ import annotations
 
+import gc
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import Callable, Literal, Optional, Union
 
 import configargparse
 import torch
-import torch.nn as nn
 from rfstudio.data import MeshViewSynthesisDataset, MultiViewDataset, SfMDataset
 from rfstudio.engine.train import TrainTask
-from rfstudio.graphics import Cameras, DepthImages, Points, RGBAImages
+from rfstudio.graphics import Cameras, DepthImages, Points, RGBAImages, SegImages
 from rfstudio.graphics.math import rgb2sh, safe_normalize, sh2rgb
 from rfstudio.model import VanillaNeRF, VanillaNeuS
-from torch import Tensor
+from rfstudio.utils.colormap import BinaryColorMap
+from torch import Tensor, nn
 
 import radfoam
 from configs import DatasetParams, ModelParams, OptimizationParams, PipelineParams
@@ -209,41 +210,38 @@ class RadFoamProxy:
         neus_model = neus_model.to(device)
         neus_model.eval()
 
-        pts = points.positions.view(-1, 3).to(device)
+        points = points.positions.view(-1, 3).to(device)
 
         # Query SDF, geometric features, and gradients at points in chunks to avoid OOM
         sdf_field = neus_model.sdf_field
         
         queried_sdf_vals = []
-        queried_geom_feats = []
-        queried_gradients = []
         queried_colors = []
         
         # Process in chunks to avoid OOM during gradient computation
-        for pts_chunk in torch.split(pts, 1024):
-            sdf_vals_chunk, geom_feats_chunk, gradients_chunk = sdf_field.sdf_mlp.get_sdf_gradient(pts_chunk)
+        for points_chunk in torch.split(points, 1024):
+            sdf_vals_chunk, geom_feats_chunk, gradients_chunk = sdf_field.sdf_mlp.get_sdf_gradient(points_chunk)
             
             # Fixed viewing direction per point (approximation)
-            view_dirs_chunk = torch.tensor([0.0, 0.0, -1.0], device=device).expand_as(pts_chunk)
+            view_dirs_chunk = torch.tensor([0.0, 0.0, -1.0], device=device).expand_as(points_chunk)
             enc_dir_chunk = sdf_field.direction_encoding(view_dirs_chunk / view_dirs_chunk.norm(dim=-1, keepdim=True))
             
             # Color head expects positions, gradients, encoded_dir, and geom_feats
             colors_chunk = sdf_field.color_mlp(torch.cat((
-                pts_chunk,
+                points_chunk,
                 gradients_chunk,
                 enc_dir_chunk,
                 geom_feats_chunk,
             ), dim=-1))  # [chunk_size, 3] in [0,1]
             
             queried_sdf_vals.append(sdf_vals_chunk)
-            queried_geom_feats.append(geom_feats_chunk)
-            queried_gradients.append(gradients_chunk)
             queried_colors.append(colors_chunk)
         
         sdf_vals = torch.cat(queried_sdf_vals, dim=0)
-        geom_feats = torch.cat(queried_geom_feats, dim=0)
-        gradients = torch.cat(queried_gradients, dim=0)
         colors = torch.cat(queried_colors, dim=0)
+
+        gc.collect()
+        torch.cuda.empty_cache()
 
         # Build RadFoam scene
         class DummyArgs:
@@ -253,20 +251,20 @@ class RadFoamProxy:
                 self.final_points = num_points
                 self.activation_scale = activation_scale
 
-        radfoam_args = DummyArgs(sh_degree, pts.shape[0], activation_scale)
+        radfoam_args = DummyArgs(sh_degree, points.shape[0], activation_scale)
         # use NeuS renderer
-        dummy_colors = torch.ones_like(pts)
-        radfoam_model = RadFoamScene(radfoam_args, points=pts, points_colors=dummy_colors, device=device, use_neus_renderer=True)
+        radfoam_model = RadFoamScene(radfoam_args, device=device, use_neus_renderer=True)
+        radfoam_model.triangulation = radfoam.Triangulation(points)
         perm = radfoam_model.triangulation.permutation().to(torch.long)
 
-        radfoam_model.primal_points = nn.Parameter(pts[perm])
+        radfoam_model.primal_points = nn.Parameter(points[perm])
         radfoam_model.att_dc = nn.Parameter(rgb2sh(colors)[perm])
         radfoam_model.att_sh = nn.Parameter(torch.zeros_like(radfoam_model.att_sh))
 
         # store SDF values directly
         radfoam_model.density = nn.Parameter(sdf_vals[perm])
         # Set the deviation parameter
-        radfoam_model.deviation = nn.Parameter(sdf_field.deviation.params.clone())
+        radfoam_model.deviation = nn.Parameter(sdf_field.deviation.params.detach().clone())
         
         # Store the NeuS model for gradient computation during rendering
         radfoam_model.neus_model = neus_model
@@ -316,6 +314,21 @@ class RadFoamProxy:
             outputs.append(output)
         return RGBAImages(torch.stack(outputs)).to(self.device)
     
+    def get_intersections(self, *, progress_handle: Optional[Callable] = None) -> SegImages:
+        rays = self.data_handler.rays
+        rng = range(rays.shape[0])
+        if progress_handle is not None:
+            rng = progress_handle(rng)
+        ray_batch_fetcher = radfoam.BatchFetcher(rays, batch_size=1, shuffle=False)
+        outputs = []
+        for i in rng:
+            ray_batch = ray_batch_fetcher.next()[0]
+            _, _, _, output, _ = self.model(ray_batch, self.start_points[i])
+            output = output.long().clone()
+            torch.cuda.synchronize()
+            outputs.append(torch.where(output > 1024, 0, output))
+        return SegImages(torch.stack(outputs)).to(self.device)
+    
     def get_depths(self, *, progress_handle: Optional[Callable] = None) -> DepthImages:
         cameras = self.get_cameras(colmap2blender=True)
         rays = self.data_handler.rays
@@ -335,8 +348,14 @@ class RadFoamProxy:
             outputs.append(depth)
         return DepthImages(torch.stack(outputs))
 
-    def get_pts(self) -> Points:
+    def get_pts(self, *, color: Literal['raw', 'cdf'] = 'raw') -> Points:
+        if color == 'raw':
+            colors = sh2rgb(self.model.att_dc).clamp(0, 1)
+        elif color == 'cdf':
+            colors = BinaryColorMap().from_scaled(
+                ((self.model.deviation * 10).exp().clamp(1e-6, 1e6) * self.model.density.detach()).sigmoid().view(-1, 1)
+            )
         return Points(
             positions=self.model.primal_points,
-            colors=sh2rgb(self.model.att_dc).clamp(0, 1),
+            colors=colors,
         )

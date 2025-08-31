@@ -23,9 +23,10 @@ class Script(Task):
     mesh_proxy: Optional[Path] = None
     output: Optional[Path] = None
     rgb: bool = True
+    intersection: bool = True
+    noise: float = 0.01
 
     num_points: int = 124_288
-    bg: float = 0.0
     viser: Visualizer = Visualizer()
     debug: bool = False
     step: Optional[int] = None
@@ -39,7 +40,7 @@ class Script(Task):
         else:
             mesh = TriangleMesh.from_file(self.mesh_proxy)
             pts = mesh.uniformly_sample(self.num_points)
-            pts.positions.add_(torch.randn_like(pts.positions) * 0.04)
+            pts.positions.add_(torch.randn_like(pts.positions) * self.noise)
             vis['mesh_proxy'] = mesh
             console.print(f"Loaded proxy mesh from {self.mesh_proxy}, sampled {len(pts)} points.")
 
@@ -52,46 +53,69 @@ class Script(Task):
                 step=self.step,
             )
             cameras = proxy.get_cameras()
-            pts = proxy.get_pts().cpu()
+            pts = proxy.get_pts().cpu() # update after perm
             vis['cameras'] = cameras
-            vis['cell_centers'] = pts
+            vis['cells/rgb'] = proxy.get_pts(color='raw').cpu()
+            vis['cells/cdf'] = proxy.get_pts(color='cdf').cpu()
 
         console.print("RadFoam model created from NeuS.")
         gc.collect()
         torch.cuda.empty_cache()
 
-        if self.debug:
-            tet = DMTet(
-                vertices=pts.positions,
-                indices=proxy.model.triangulation.tets().cpu().long(),
-                sdf_values= torch.zeros_like(pts.positions[..., :1]),
-            )
-            vis['tet'] = tet
-            self.viser.show(**vis)
-
         if self.output is None:
+            if self.debug:
+                tet = DMTet(
+                    vertices=pts.positions,
+                    indices=proxy.model.triangulation.tets().cpu().long(),
+                    sdf_values= torch.zeros_like(pts.positions[..., :1]),
+                )
+                vis['tet'] = tet
             self.viser.show(**vis)
             return
 
         # 2. Dump depth and RGB images
         assert not self.output.exists() or self.output.is_dir()
-        with console.progress('Rendering Depth', transient=True) as ptrack:
+        if self.debug:
+            proxy.data_handler.rays = proxy.data_handler.rays[:8]
+
+        with console.progress('Rendering Depth', transient=True, enabled=not self.debug) as ptrack:
             depths = proxy.get_depths(progress_handle=ptrack)
         if self.rgb:
-            with console.progress('Rendering RGB', transient=True) as ptrack:
-                rgbs = proxy.get_rgbas(progress_handle=ptrack).cpu().blend((self.bg, self.bg, self.bg))
-                gt_rgbs = proxy.get_gt_images().cpu().blend((self.bg, self.bg, self.bg))
+            with console.progress('Rendering RGB', transient=True, enabled=not self.debug) as ptrack:
+                rgbs = proxy.get_rgbas(progress_handle=ptrack).cpu()
+                gt_rgbs = proxy.get_gt_images().cpu()
+        if self.intersection:
+            with console.progress('Rendering Intersection', transient=True, enabled=not self.debug) as ptrack:
+                intersections = proxy.get_intersections(progress_handle=ptrack).cpu()
         self.output.mkdir(exist_ok=True, parents=True)
-        with console.progress('Dumping', transient=True) as ptrack:
+        with console.progress('Dumping', transient=True, enabled=not self.debug) as ptrack:
             for i in ptrack(range(len(depths))):
-                img = torch.cat((
-                    depths[i].compute_pseudo_normals(cameras=cameras[i]).visualize((self.bg, self.bg, self.bg)).item(),
-                    depths[i].visualize(max_bound=8).item(),
-                ), dim=1)
+                # img = torch.cat((
+                #     depths[i].compute_pseudo_normals(cameras=cameras[i]).visualize().item(),
+                #     torch.cat((
+                #         depths[i].visualize(max_bound=8).item(),
+                #         torch.ones_like(depths[i].item()[..., :1])
+                #     ), dim=-1),
+                # ), dim=1)
+                img = depths[i].item().new_zeros(depths[i].item().shape[0], depths[i].item().shape[1] * 2, 4)
                 if self.rgb:
                     img = torch.cat((
                         torch.cat((rgbs[i].item(), gt_rgbs[i].item()), dim=1),
                         img.cpu(),
+                    ), dim=0)
+                if self.intersection:
+                    img = torch.cat((
+                        img.cpu(),
+                        torch.cat((
+                            torch.cat((
+                                intersections[i].visualize(coloring='sequential').item(),
+                                intersections[i].visualize(coloring='vdc').item(),
+                            ), dim=1),
+                            torch.cat((
+                                torch.ones_like(depths[i].item()[..., :1], device='cpu'),
+                                torch.ones_like(depths[i].item()[..., :1], device='cpu'),
+                            ), dim=1),
+                        ), dim=-1)
                     ), dim=0)
                 dump_float32_image(self.output / f'{i:04d}.png', img.clamp(0, 1))
         console.print(f"Images dumped to [green]{self.output}[/green]")

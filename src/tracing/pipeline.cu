@@ -172,11 +172,7 @@ __global__ void forward_neus(TraceSettings settings,
         const attr_scalar *attr_ptr = attributes + v_idx * attr_memory_size;
         s = (float)attr_ptr[attr_memory_size - 1];
         g = gradients[v_idx];
-        if (s > 1e-6f) {
-            rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
-        } else {
-            rgb = Vec3f::Zero();
-        }
+        rgb = load_sh_as_rgb<attr_scalar, sh_degree>(sh_coeffs, attr_ptr);
     };
 
     float transmittance = 1.0f;
@@ -214,13 +210,14 @@ __global__ void forward_neus(TraceSettings settings,
         float p = prev_cdf - next_cdf;
         float c = prev_cdf;
         
-        float alpha = fminf(fmaxf((p + 1e-5f) / (c + 1e-5f), 0.0f), 1.0f);
+        float alpha = fminf(fmaxf((p + 1e-5f) / (c + 1e-5f), 0.0f), 0.1f);
         float weight = transmittance * alpha;
 
         if (point_contribution) {
             atomicAdd(point_contribution + point_idx, (attr_scalar)weight);
         }
         accumulated_rgb += weight * rgb_primal;
+        // accumulated_rgb += weight * Vec3f(1.0f, 1.0f, 1.0f);
 
         float next_transmittance = transmittance * (1 - alpha);
         while (current_quantile_idx < num_depth_quantiles &&
